@@ -1,14 +1,17 @@
 /* Copyright (c) 2005 - 2012 Vertica, an HP company -*- C++ -*- */
 // vim:ru:sm:ts=4:et:tw=0
 
+
 #include "Vertica.h"
 #include "StringParsers.h"
+#undef SQLError
 #include <sql.h>
 #include <time.h>
 #include <sqlext.h>
 #include <string.h>
 #include <stdlib.h>
 #include <string>
+#include <fstream>
 #include <iostream>
 #include <vector>
 #include <sstream>
@@ -185,7 +188,7 @@ private:
         // Everything string-based is the same size too.
         // Except ODBC may decide that we want a trailing null terminator.
         case CharOID: case VarcharOID: case BinaryOID: case VarbinaryOID:
-	
+
 #ifndef NO_LONG_OIDS
 	case LongVarbinaryOID: case LongVarcharOID:
 #endif // NO_LONG_OIDS
@@ -204,13 +207,13 @@ private:
         // So just make something up; hope it's long enough.
         case TimestampTzOID: case TimeTzOID:
             return 80;
-            
+
         // Everything struct-based needs to be the size of that struct
         case DateOID: return sizeof(DATE_STRUCT);
         case TimeOID: return sizeof(TIME_STRUCT);
         case TimestampOID: return sizeof(TIMESTAMP_STRUCT);
         case IntervalOID: case IntervalYMOID: return sizeof(SQL_INTERVAL_STRUCT);
-        
+
         // Otherwise it's a type we don't know about
         default: vt_report_error(0, "Unrecognized Vertica type: %s (OID: %llu)", type.getTypeStr(), type.getTypeOid()); return (uint32)-1;  // Should never get here; vt_report_error() shouldn't return
         }
@@ -221,7 +224,7 @@ private:
         bool error = false;
         switch (r) {
         case SQL_SUCCESS: return;
-            
+
         case SQL_ERROR: error = true;  // Fall through
         case SQL_SUCCESS_WITH_INFO: {
             SQLCHAR state_rec[6];
@@ -242,9 +245,9 @@ private:
                     srvInterface.log("ODBC Warning:  Error reported attempting to get the warning message for another operation!  Unable to display the warning message.  Original warning was in function %s.", fn_name);
                 }
             }
-            
+
             const char *truncated = (msg_length > (SQLSMALLINT)MAX_DIAG_MSG_TEXT_LENGTH ? "... (message truncated)" : "");
-            
+
             if (error) {
                 vt_report_error(0, "ODBC Error: %s failed with error code %s, native code %d [%s%s]",
                                 fn_name, &state_rec[0], (int)native_code, &message_text[0], truncated);
@@ -255,9 +258,9 @@ private:
 
             break;
         }
-            
+
         case SQL_INVALID_HANDLE: vt_report_error(0, "ODBC Error: %s failed with internal error SQL_INVALID_HANDLE", fn_name); break;
-            
+
         case SQL_STILL_EXECUTING: vt_report_error(0, "ODBC Error: Synchronous function %s returned SQL_STILL_EXECUTING", fn_name); break;
 
         case SQL_NO_DATA: vt_report_error(0, "ODBC Error: %s returned SQL_NO_DATA.  Were we cancelled remotely?", fn_name); break;
@@ -302,12 +305,12 @@ public:
                 data.len = lenp[i][j] ;
 
                 std::string rejectReason = "unrecognized syntax from remote database";
-                
+
                 // Null's are easy
                 // except when they're not due to typecast mismatch fun
                 if ((int)data.len == (int)SQL_NULL_DATA) { writer->setNull(i); }
                 else switch (vtype[i]) {
-                        
+
                         // Simple fixed-length types
                         // Let C++ figure out how to convert from, ie., SQLBIGINT to vint.
                         // (Both are native C++ types with appropriate meanings, so hopefully this will DTRT.)
@@ -321,7 +324,7 @@ public:
                             // So we get the data as a string and parse it to an int64.
                             if (data.len == SQL_NTS) { writer->setInt(i, vint_null); }
                             else { writer->setInt(i, (vint)atoll((char*)data.buf)); }
-                        } 
+                        }
                         break;
                     case Float8OID:         writer->setFloat(i, *(SQLDOUBLE*)data.buf); break;
 
@@ -359,20 +362,20 @@ public:
                         writer->setTimestamp(i, getTimestampFromUnixTime(unixtime + d.tm_gmtoff) + s.fraction/1000);
                         break;
                     }
-                        
+
                         // Date/Time functions that require string-parsing
                     case TimeTzOID: {
                         // Hacky workaround:  Some databases (ie., us) send the empty string instead of NULL here
                         if (((char*)data.buf)[0] == '\0') { writer->setNull(i); break; }
                         TimeADT t = 0;
-                        
+
                         if (!parser.parseTimeTz((char*)data.buf, (size_t)data.len, i, t, getVerticaTypeOfCol(i), rejectReason)) {
                             vt_report_error(0, "Error parsing TimeTz: '%s' (%s)", (char*)data.buf, rejectReason.c_str());  // No rejected-rows for us!  Die on failure.
                         }
                         writer->setTimeTz(i,t);
                         break;
                     }
-                        
+
                     case TimestampTzOID: {
                         // Hacky workaround:  Some databases (ie., us) send the empty string instead of NULL here
                         if (((char*)data.buf)[0] == '\0') { writer->setNull(i); break; }
@@ -383,10 +386,10 @@ public:
                         writer->setTimestampTz(i,t);
                         break;
                     }
-                        
+
                     case IntervalOID: {
                         SQL_INTERVAL_STRUCT &intv = *(SQL_INTERVAL_STRUCT*)data.buf;
-                        
+
                         // Make sure we know what we're talking about
                         if (intv.interval_type != SQL_IS_DAY_TO_SECOND) {
                             vt_report_error(0, "Error parsing Interval:  Is type %d; expecting type 10 (SQL_IS_HOUR_TO_SECOND)", (int)intv.interval_type);
@@ -399,14 +402,14 @@ public:
                                         + (intv.intval.day_second.second*usPerSecond)
                                         + (intv.intval.day_second.fraction/1000)) // Fractions are in nanoseconds; we do microseconds
                             * (intv.interval_sign == SQL_TRUE ? -1 : 1); // Apply the sign bit
-                        
+
                         writer->setInterval(i, ret);
-                        break;   
+                        break;
                     }
 
                     case IntervalYMOID: {
                         SQL_INTERVAL_STRUCT &intv = *(SQL_INTERVAL_STRUCT*)data.buf;
-                        
+
                         // Make sure we know what we're talking about
                         if (intv.interval_type != SQL_IS_YEAR_TO_MONTH) {
                             vt_report_error(0, "Error parsing Interval:  Is type %d; expecting type 7 (SQL_IS_YEAR_TO_MONTH)", (int)intv.interval_type);
@@ -416,11 +419,11 @@ public:
                         Interval ret = ((intv.intval.year_month.year*MONTHS_PER_YEAR)
                                         + (intv.intval.year_month.month))
                             * (intv.interval_sign == SQL_TRUE ? -1 : 1); // Apply the sign bit
-                        
+
                         writer->setInterval(i, ret);
-                        break;   
+                        break;
                     }
-                        
+
                         // TODO:  Sort out the binary ODBC Numeric format
                         // and the abilities of various DB's to cast to/from it on demand;
                         // make this use the native binary format and cast/convert as needed.
@@ -482,8 +485,9 @@ public:
         std::string connect = "" ;      // Connect string
         std::string query = "" ;        // Remote system query string
         std::string predicates = "" ;   // Predicates
+        std::string setenvs = "" ;      // Environment variables
 
-        // Read User defined Session parameters 
+        // Read User defined Session parameters
         if (srvInterface.getUDSessionParamReader("library").containsParameter("src_rfilter")) {
             src_rfilter = ( srvInterface.getUDSessionParamReader("library").getStringRef("src_rfilter").str() == "f" ) ? false : true ;
         } else if (srvInterface.getParamReader().containsParameter("src_rfilter")) {
@@ -500,26 +504,56 @@ public:
             src_cfilter = srvInterface.getParamReader().getBoolRef("src_cfilter") ;
         }
         connect = srvInterface.getParamReader().getStringRef("connect").str();
+
 #if LOADER_DEBUG
   srvInterface.log("DEBUG Initial connect=<%s>", connect.c_str());
   srvInterface.log("DEBUG Initial query=<%s>", query.c_str());
   srvInterface.log("DEBUG SETUP src_rfilter is %s", src_rfilter ? "true" : "false" );
   srvInterface.log("DEBUG SETUP src_cfilter is %s", src_cfilter ? "true" : "false" );
 #endif
+        // Check "connect" parameter
+        if ( connect.empty() ) {
+            vt_report_error(0, "Error:  connect string is empty");
+        } else if ( connect[0] == '@' ) {
+            std::ifstream inFile ;
+            inFile.open(connect.substr(1));
+            std::stringstream ssFile;
+            ssFile << inFile.rdbuf() ;
+            connect = ssFile.str() ;
+            connect.erase(std::remove(connect.begin(), connect.end(), '\n'), connect.end());
+#if LOADER_DEBUG
+  srvInterface.log("DEBUG new connect=<%s>", connect.c_str());
+#endif
+        }
 
-        // Check Connection string, Query and Rowset "public" parameters
+        // Check "setenvs" parameter
+        if (srvInterface.getParamReader().containsParameter("setenvs")) {
+            setenvs = srvInterface.getParamReader().getStringRef("setenvs").str();
+		    std::stringstream se_stream ( setenvs ) ;
+		    std::string token ;
+
+		    while ( std::getline ( se_stream, token, ';' ) ) {
+			    size_t pos = 0 ;
+			    if ( ( pos = token.find('=') ) && pos != std::string::npos ) {
+#if LOADER_DEBUG
+  srvInterface.log("DEBUG setting <%s> to <%s>", token.substr(0, pos).c_str(), token.substr(pos+1).c_str() );
+#endif
+				    setenv ( token.substr(0, pos).c_str(), token.substr(pos + 1).c_str(), 1);
+			    }
+		    }
+        }
 
         // Check "rowset" parameter
         if (srvInterface.getParamReader().containsParameter("rowset")) {
             vint rowset_param = srvInterface.getParamReader().getIntRef("rowset") ;
-            if ( rowset_param < MIN_ROWSET || rowset_param > MAX_ROWSET ) 
+            if ( rowset_param < MIN_ROWSET || rowset_param > MAX_ROWSET )
                 vt_report_error(0, "Error:  Invalid rowset=%zd. Permitted values between %d and %d", rowset_param, MIN_ROWSET, MAX_ROWSET);
             else
                 rowset = (size_t) rowset_param ;
         } else {
                 rowset = DEF_ROWSET ;	// use default if not set
         }
-  
+
         // Check "hidden" parameters __pred_#__ to filter out rows
         char pred[16] ;
         for ( unsigned int k = 0, l = 0 ; k < MAX_PRENUM ; k++ ) {
@@ -537,9 +571,10 @@ public:
   srvInterface.log("DEBUG new query length=%zu, new query string=<%s>",query.length(),  query.c_str());
 #endif
                 } else if ( src_rfilter ) {
-                        pcrecpp::RE(REG_ANYMTC).GlobalReplace(REG_ANYREP, &mpred) ;     // to replace ANY(ARRAY()) with IN()
-                        pcrecpp::RE(REG_TILDEM).GlobalReplace(REG_TILDER, &mpred) ;     // to replace ~~ with LIKE
-                        if ( l++ ) 
+                         pcrecpp::RE(REG_ANYMTC).GlobalReplace(REG_ANYREP, &mpred) ;     // to replace ANY(ARRAY()) with IN()
+                         pcrecpp::RE(REG_TILDEM).GlobalReplace(REG_TILDER, &mpred) ;     // to replace ~~ with LIKE
+                         pcrecpp::RE(REG_CASTRM).GlobalReplace("", &mpred) ;             // to replace :: casting
+                        if ( l++ )
                             predicates += " AND " + mpred ;
                         else
                             predicates += " WHERE " + mpred ;
@@ -561,7 +596,7 @@ public:
                    std::stringstream ss_idx(srvInterface.getParamReader().getStringRef("__query_col_idx__").str());
                    std::string tk_col, tk_idx, slist="" ;
                    int k = 0;
-       
+
                    while (std::getline(ss_idx, tk_idx, ',')) {
                        std::getline(ss_cols, tk_col, ',');
                        for (  ; k < atoi(tk_idx.c_str()) ; k++ )
@@ -607,7 +642,7 @@ public:
         // Append predicates to outer SELECT
         if ( src_rfilter )
             query += predicates ;
-  
+
         SQLRETURN r;
 #if LOADER_DEBUG
   srvInterface.log("DEBUG query=%s", query.c_str());
@@ -722,6 +757,7 @@ public:
                                   SizedColumnTypes &parameterTypes) {
         parameterTypes.addVarchar(65000, "connect");
         parameterTypes.addVarchar(65000, "query");
+        parameterTypes.addVarchar(65000, "setenvs");
         parameterTypes.addVarchar(65000, "__query_col_name__");
         parameterTypes.addVarchar(65000, "__query_col_idx__");
         char pred[16] ;
@@ -774,10 +810,10 @@ RegisterFactory(ODBCSourceFactory);
 RegisterLibrary (
     "Vertica Team",
     __DATE__,
-    "0.10.6",
+    "0.11.2",
     "v11.x.x",
     "TBD",
     "With this loader Vertica can COPY and SELECT from any ODBC data source",
-    "", 
-    ""  
-);      
+    "",
+    ""
+);
