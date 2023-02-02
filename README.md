@@ -191,6 +191,7 @@ Remove ``pcre-devel`` and ``pcre-cpp`` packages (if installed) using the appropr
 
 **STEP 2: install PCRE from sources**:
 ```
+# wget https://sourceforge.net/projects/pcre/files/pcre/8.45/pcre-8.45.tar.bz2
 # tar xzvf pcre-8.45.tar.gz 
 # cd pcre-8.45
 # ./configure CXXFLAGS='-std=c++11 -D_GLIBCXX_USE_CXX11_ABI=0'
